@@ -6,8 +6,8 @@ rust-version = "1.70"
 authors = ["KeraDB <hello@keradb.io>"]
 description = "Rust SDK for KeraDB - a lightweight, embedded NoSQL document database with vector search"
 license = "MIT"
-repository = "https://github.com/keradb/rust-sdk"
-homepage = "https://github.com/keradb/keradb"
+repository = "https://github.com/KeraDB/rust-sdk"
+homepage = "https://keradb.github.io"
 documentation = "https://docs.rs/keradb-sdk"
 readme = "README.md"
 keywords = ["database", "nosql", "embedded", "vector", "document"]
@@ -37,7 +37,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Dynamic library loading (C FFI)
-libloading = "0.8"
+libloading = ">=0.8, <1.0"
 
 # Error handling
 thiserror = "1.0"
@@ -53,6 +53,12 @@ rand = "0.8"
 # Enable integration tests that require the native keradb shared library.
 # Run with: cargo test --features integration
 integration = []
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
 
 [[example]]
 name = "basic"
