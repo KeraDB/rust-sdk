@@ -62,6 +62,28 @@ fn sqlite_setup() -> Connection {
     conn
 }
 
+/// Open an on-disk SQLite database in a temp file.
+fn sqlite_ondisk_setup() -> (Connection, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("bench.db");
+    let conn = Connection::open(&path).expect("sqlite ondisk");
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         CREATE TABLE documents (
+             id      TEXT PRIMARY KEY,
+             name    TEXT NOT NULL,
+             age     INTEGER NOT NULL,
+             email   TEXT NOT NULL,
+             active  INTEGER NOT NULL,
+             metadata TEXT NOT NULL
+         );
+         CREATE INDEX idx_name ON documents(name);",
+    )
+    .expect("create table ondisk");
+    (conn, dir)
+}
+
 /// Insert `n` rows into SQLite and return the last inserted id.
 fn sqlite_seed(conn: &Connection, n: usize) -> String {
     let mut stmt = conn
@@ -122,8 +144,8 @@ fn bench_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("insert_one");
     group.measurement_time(Duration::from_secs(10));
 
-    // SQLite
-    group.bench_function("sqlite", |b| {
+    // SQLite in-memory (no fsync)
+    group.bench_function("sqlite/inmem", |b| {
         let conn = sqlite_setup();
         let mut counter = 0usize;
         b.iter(|| {
@@ -144,7 +166,29 @@ fn bench_insert(c: &mut Criterion) {
         });
     });
 
-    // KeraDB (requires native library)
+    // SQLite on-disk with WAL (apples-to-apples with KeraDB)
+    group.bench_function("sqlite/ondisk", |b| {
+        let (conn, _dir) = sqlite_ondisk_setup();
+        let mut counter = 0usize;
+        b.iter(|| {
+            counter += 1;
+            conn.execute(
+                "INSERT OR REPLACE INTO documents (id, name, age, email, active, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    format!("doc{}", counter),
+                    format!("User{}", counter),
+                    black_box(20 + counter % 50),
+                    format!("user{}@example.com", counter),
+                    counter % 2,
+                    "{}"
+                ],
+            )
+            .expect("insert")
+        });
+    });
+
+    // KeraDB on-disk (requires native library)
     #[cfg(feature = "integration")]
     {
         group.bench_function("keradb", |b| {
@@ -176,13 +220,14 @@ fn bench_insert_batch(c: &mut Criterion) {
     group.throughput(Throughput::Elements(BATCH_SIZE as u64));
     group.measurement_time(Duration::from_secs(15));
 
-    // SQLite
+    // SQLite in-memory with transaction (realistic batch scenario)
     group.bench_with_input(
-        BenchmarkId::new("sqlite", BATCH_SIZE),
+        BenchmarkId::new("sqlite/inmem", BATCH_SIZE),
         &BATCH_SIZE,
         |b, &size| {
             b.iter(|| {
                 let conn = sqlite_setup();
+                conn.execute_batch("BEGIN").expect("begin");
                 for i in 0..size {
                     conn.execute(
                         "INSERT INTO documents (id, name, age, email, active, metadata)
@@ -198,11 +243,40 @@ fn bench_insert_batch(c: &mut Criterion) {
                     )
                     .expect("insert");
                 }
+                conn.execute_batch("COMMIT").expect("commit");
             });
         },
     );
 
-    // KeraDB
+    // SQLite on-disk with transaction (apples-to-apples with KeraDB)
+    group.bench_with_input(
+        BenchmarkId::new("sqlite/ondisk", BATCH_SIZE),
+        &BATCH_SIZE,
+        |b, &size| {
+            b.iter(|| {
+                let (conn, _dir) = sqlite_ondisk_setup();
+                conn.execute_batch("BEGIN").expect("begin");
+                for i in 0..size {
+                    conn.execute(
+                        "INSERT INTO documents (id, name, age, email, active, metadata)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![
+                            format!("doc{}", i),
+                            format!("User{}", i),
+                            20 + i % 50,
+                            format!("user{}@example.com", i),
+                            i % 2,
+                            "{}"
+                        ],
+                    )
+                    .expect("insert");
+                }
+                conn.execute_batch("COMMIT").expect("commit");
+            });
+        },
+    );
+
+    // KeraDB on-disk
     #[cfg(feature = "integration")]
     group.bench_with_input(
         BenchmarkId::new("keradb", BATCH_SIZE),
@@ -237,16 +311,29 @@ fn bench_find_by_id(c: &mut Criterion) {
     let mut group = c.benchmark_group("find_by_id");
     group.measurement_time(Duration::from_secs(10));
 
-    // SQLite
-    group.bench_function("sqlite", |b| {
+    // SQLite in-memory — prepare statement outside iter to exclude compile overhead
+    group.bench_function("sqlite/inmem", |b| {
         let conn = sqlite_setup();
         sqlite_seed(&conn, 100);
+        let mut stmt = conn
+            .prepare("SELECT * FROM documents WHERE id = ?1")
+            .expect("prepare");
         b.iter(|| {
-            let mut stmt = conn
-                .prepare("SELECT * FROM documents WHERE id = ?1")
-                .expect("prepare");
             stmt.query_row(params!["doc50"], |_| Ok(()))
                 .expect("find")
+        });
+    });
+
+    // SQLite on-disk
+    group.bench_function("sqlite/ondisk", |b| {
+        let (conn, _dir) = sqlite_ondisk_setup();
+        sqlite_seed(&conn, 100);
+        let mut stmt = conn
+            .prepare("SELECT * FROM documents WHERE id = ?1")
+            .expect("prepare ondisk");
+        b.iter(|| {
+            stmt.query_row(params!["doc50"], |_| Ok(()))
+                .expect("find ondisk")
         });
     });
 
@@ -276,14 +363,14 @@ fn bench_find_all(c: &mut Criterion) {
     group.throughput(Throughput::Elements(100));
     group.measurement_time(Duration::from_secs(10));
 
-    // SQLite
-    group.bench_function("sqlite", |b| {
+    // SQLite in-memory — prepare statement outside iter
+    group.bench_function("sqlite/inmem", |b| {
         let conn = sqlite_setup();
         sqlite_seed(&conn, 100);
+        let mut stmt = conn
+            .prepare("SELECT * FROM documents")
+            .expect("prepare");
         b.iter(|| {
-            let mut stmt = conn
-                .prepare("SELECT * FROM documents")
-                .expect("prepare");
             let rows: Vec<_> = stmt
                 .query_map([], |row| {
                     Ok((
@@ -293,6 +380,28 @@ fn bench_find_all(c: &mut Criterion) {
                     ))
                 })
                 .expect("query")
+                .collect();
+            black_box(rows)
+        });
+    });
+
+    // SQLite on-disk
+    group.bench_function("sqlite/ondisk", |b| {
+        let (conn, _dir) = sqlite_ondisk_setup();
+        sqlite_seed(&conn, 100);
+        let mut stmt = conn
+            .prepare("SELECT * FROM documents")
+            .expect("prepare ondisk");
+        b.iter(|| {
+            let rows: Vec<_> = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .expect("query ondisk")
                 .collect();
             black_box(rows)
         });
@@ -320,8 +429,8 @@ fn bench_update(c: &mut Criterion) {
     let mut group = c.benchmark_group("update_one");
     group.measurement_time(Duration::from_secs(10));
 
-    // SQLite
-    group.bench_function("sqlite", |b| {
+    // SQLite in-memory
+    group.bench_function("sqlite/inmem", |b| {
         let conn = sqlite_setup();
         sqlite_seed(&conn, 1);
         b.iter(|| {
@@ -330,6 +439,19 @@ fn bench_update(c: &mut Criterion) {
                 params![black_box(31), "doc0"],
             )
             .expect("update")
+        });
+    });
+
+    // SQLite on-disk
+    group.bench_function("sqlite/ondisk", |b| {
+        let (conn, _dir) = sqlite_ondisk_setup();
+        sqlite_seed(&conn, 1);
+        b.iter(|| {
+            conn.execute(
+                "UPDATE documents SET age = ?1 WHERE id = ?2",
+                params![black_box(31), "doc0"],
+            )
+            .expect("update ondisk")
         });
     });
 
@@ -361,8 +483,8 @@ fn bench_delete(c: &mut Criterion) {
     let mut group = c.benchmark_group("delete_one");
     group.measurement_time(Duration::from_secs(10));
 
-    // SQLite — insert+delete in the same iter to match KeraDB semantics
-    group.bench_function("sqlite", |b| {
+    // SQLite in-memory — insert+delete in same iter to match KeraDB semantics
+    group.bench_function("sqlite/inmem", |b| {
         let conn = sqlite_setup();
         let mut counter = 0usize;
         b.iter(|| {
@@ -376,6 +498,24 @@ fn bench_delete(c: &mut Criterion) {
             .expect("insert");
             conn.execute("DELETE FROM documents WHERE id = ?1", params![&id])
                 .expect("delete")
+        });
+    });
+
+    // SQLite on-disk
+    group.bench_function("sqlite/ondisk", |b| {
+        let (conn, _dir) = sqlite_ondisk_setup();
+        let mut counter = 0usize;
+        b.iter(|| {
+            counter += 1;
+            let id = format!("tmp{}", counter);
+            conn.execute(
+                "INSERT INTO documents (id, name, age, email, active, metadata)
+                 VALUES (?1, 'Temp', 25, 'tmp@example.com', 1, '{}')",
+                params![&id],
+            )
+            .expect("insert ondisk");
+            conn.execute("DELETE FROM documents WHERE id = ?1", params![&id])
+                .expect("delete ondisk")
         });
     });
 
@@ -406,13 +546,23 @@ fn bench_count(c: &mut Criterion) {
     let mut group = c.benchmark_group("count_documents");
     group.measurement_time(Duration::from_secs(10));
 
-    // SQLite
-    group.bench_function("sqlite", |b| {
+    // SQLite in-memory
+    group.bench_function("sqlite/inmem", |b| {
         let conn = sqlite_setup();
         sqlite_seed(&conn, 100);
         b.iter(|| {
             conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get::<_, i64>(0))
                 .expect("count")
+        });
+    });
+
+    // SQLite on-disk
+    group.bench_function("sqlite/ondisk", |b| {
+        let (conn, _dir) = sqlite_ondisk_setup();
+        sqlite_seed(&conn, 100);
+        b.iter(|| {
+            conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get::<_, i64>(0))
+                .expect("count ondisk")
         });
     });
 
@@ -442,10 +592,11 @@ fn bench_bulk_throughput(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(30));
 
-    // SQLite
-    group.bench_function("sqlite", |b| {
+    // SQLite in-memory with transaction (realistic bulk scenario)
+    group.bench_function("sqlite/inmem", |b| {
         b.iter(|| {
             let conn = sqlite_setup();
+            conn.execute_batch("BEGIN").expect("begin");
             for i in 0..NUM_DOCS {
                 conn.execute(
                     "INSERT INTO documents (id, name, age, email, active, metadata)
@@ -461,6 +612,7 @@ fn bench_bulk_throughput(c: &mut Criterion) {
                 )
                 .expect("insert");
             }
+            conn.execute_batch("COMMIT").expect("commit");
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
                 .expect("count");
@@ -468,7 +620,35 @@ fn bench_bulk_throughput(c: &mut Criterion) {
         });
     });
 
-    // KeraDB
+    // SQLite on-disk with transaction
+    group.bench_function("sqlite/ondisk", |b| {
+        b.iter(|| {
+            let (conn, _dir) = sqlite_ondisk_setup();
+            conn.execute_batch("BEGIN").expect("begin");
+            for i in 0..NUM_DOCS {
+                conn.execute(
+                    "INSERT INTO documents (id, name, age, email, active, metadata)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        format!("doc{}", i),
+                        format!("User{}", i),
+                        20 + i % 50,
+                        format!("user{}@example.com", i),
+                        i % 2,
+                        "{}"
+                    ],
+                )
+                .expect("insert ondisk");
+            }
+            conn.execute_batch("COMMIT").expect("commit");
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+                .expect("count");
+            black_box(count)
+        });
+    });
+
+    // KeraDB on-disk
     #[cfg(feature = "integration")]
     {
         group.bench_function("keradb", |b| {
