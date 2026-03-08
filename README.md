@@ -440,6 +440,55 @@ test result: ok. 16 passed; 0 failed  (integration logic tests)
 test result: ok.  5 passed; 0 failed  (doc-tests)
 ```
 
+## Benchmarks
+
+Criterion-based benchmarks live in `benches/`. Two suites are included:
+
+| File | What it measures |
+|---|---|
+| `bench_documents.rs` | Document CRUD — KeraDB vs SQLite in-memory |
+| `bench_vectors.rs` | Vector k-NN — KeraDB HNSW vs brute-force linear scan |
+
+### Running
+
+SQLite baseline + brute-force linear scan (no native library required):
+
+```bash
+cargo bench
+```
+
+Full KeraDB vs SQLite + HNSW vs brute-force comparison (requires native `keradb` shared library):
+
+```bash
+cargo bench --features integration
+```
+
+HTML reports are written to `target/criterion/`.
+
+### Baseline results (March 2026, Windows, AMD Ryzen, `--features` not set)
+
+#### Document operations — SQLite in-memory
+
+| Benchmark | Time | Throughput |
+|---|---|---|
+| `insert_one` | 16.3 µs | — |
+| `insert_batch` (100 docs) | 1.60 ms | 63 K docs/s |
+| `find_by_id` | 8.3 µs | — |
+| `find_all` (100 docs) | 71 µs | 1.4 M docs/s |
+| `update_one` | 5.6 µs | — |
+| `delete_one` | 21.6 µs | — |
+| `count_documents` | 3.2 µs | — |
+| `bulk_throughput` (1 000 docs) | 14.7 ms | 68 K docs/s |
+
+#### Vector search — brute-force cosine scan (128-dim, SIMD off)
+
+| Benchmark | Corpus | Time | Throughput |
+|---|---|---|---|
+| `linear_scan` | 500 vecs | 82.5 µs | 6.1 M elem/s |
+| `linear_scan` | 5 000 vecs | 969 µs | 5.2 M elem/s |
+
+> KeraDB HNSW results will appear here once the native library is available. HNSW search complexity is O(log N) vs O(N) for linear scan — expect orders-of-magnitude speedup at corpus sizes ≥ 10 K.
+
 ## License
 
 MIT License
