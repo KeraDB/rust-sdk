@@ -465,29 +465,33 @@ cargo bench --features integration
 
 HTML reports are written to `target/criterion/`.
 
-### Baseline results (March 2026, Windows, AMD Ryzen, `--features` not set)
+### Results (March 2026, Windows, AMD Ryzen)
 
-#### Document operations — SQLite in-memory
+Run with `cargo bench --features integration`. SQLite uses an in-memory database; KeraDB uses a temp file.
 
-| Benchmark | Time | Throughput |
-|---|---|---|
-| `insert_one` | 16.3 µs | — |
-| `insert_batch` (100 docs) | 1.60 ms | 63 K docs/s |
-| `find_by_id` | 8.3 µs | — |
-| `find_all` (100 docs) | 71 µs | 1.4 M docs/s |
-| `update_one` | 5.6 µs | — |
-| `delete_one` | 21.6 µs | — |
-| `count_documents` | 3.2 µs | — |
-| `bulk_throughput` (1 000 docs) | 14.7 ms | 68 K docs/s |
+#### Document operations — KeraDB vs SQLite
 
-#### Vector search — brute-force cosine scan (128-dim, SIMD off)
+| Benchmark | SQLite | KeraDB | Ratio |
+|---|---|---|---|
+| `insert_one` | 16.5 µs | 88.8 µs | SQLite **5.4×** faster |
+| `insert_batch` (100 docs) | 1.61 ms · 62 K/s | 13.6 ms · 7.4 K/s | SQLite **8.4×** faster |
+| `find_by_id` | 8.5 µs | 8.4 µs | **~equal** |
+| `find_all` (100 docs) | 67.5 µs · 1.5 M/s | 787 µs · 127 K/s | SQLite **11.7×** faster |
+| `update_one` | 5.7 µs | 72.8 µs | SQLite **12.8×** faster |
+| `delete_one` | 21.9 µs | 135 µs | SQLite **6.2×** faster |
+| `count_documents` | 3.2 µs | **247 ns** | KeraDB **13×** faster |
+| `bulk_throughput` (1 000 docs) | 14.6 ms · 69 K/s | 95.8 ms · 10.4 K/s | SQLite **6.6×** faster |
+
+> SQLite uses WAL-less in-memory mode (no fsync overhead). KeraDB writes to a temp file on disk, which explains the write latency gap. `count_documents` is a hot in-memory counter in KeraDB, hence the 13× win.
+
+#### Vector search — brute-force cosine linear scan (128-dim)
 
 | Benchmark | Corpus | Time | Throughput |
 |---|---|---|---|
-| `linear_scan` | 500 vecs | 82.5 µs | 6.1 M elem/s |
-| `linear_scan` | 5 000 vecs | 969 µs | 5.2 M elem/s |
+| `linear_scan` | 500 vecs | 81.7 µs | 6.1 M elem/s |
+| `linear_scan` | 5 000 vecs | 987 µs | 5.1 M elem/s |
 
-> KeraDB HNSW results will appear here once the native library is available. HNSW search complexity is O(log N) vs O(N) for linear scan — expect orders-of-magnitude speedup at corpus sizes ≥ 10 K.
+> KeraDB HNSW vector search benchmarks require a vector-enabled native build (`keradb_create_vector_collection` symbol). When available, HNSW O(log N) search is expected to show orders-of-magnitude improvement over linear scan at corpus sizes ≥ 10 K vectors.
 
 ## License
 

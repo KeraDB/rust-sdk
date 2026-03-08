@@ -37,8 +37,7 @@ use std::time::Duration;
 
 const NUM_DOCS: usize = 1_000;
 const BATCH_SIZE: usize = 100;
-#[cfg(feature = "integration")]
-const VECTOR_DIM: usize = 128;
+
 
 // ---------------------------------------------------------------------------
 // @group SQLiteSetup : SQLite fixture helpers

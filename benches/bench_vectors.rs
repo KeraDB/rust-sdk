@@ -283,6 +283,7 @@ fn bench_ef_search_tuning(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 /// No-op placeholder so `keradb_benches` is always a valid symbol.
+#[allow(dead_code)]
 fn bench_keradb_noop(_c: &mut Criterion) {}
 
 // Always-available benchmarks (no native lib)
