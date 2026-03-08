@@ -1,0 +1,63 @@
+[package]
+name = "keradb-sdk"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+authors = ["KeraDB <hello@keradb.io>"]
+description = "Rust SDK for KeraDB - a lightweight, embedded NoSQL document database with vector search"
+license = "MIT"
+repository = "https://github.com/keradb/rust-sdk"
+homepage = "https://github.com/keradb/keradb"
+documentation = "https://docs.rs/keradb-sdk"
+readme = "README.md"
+keywords = ["database", "nosql", "embedded", "vector", "document"]
+categories = ["database-implementations", "api-bindings"]
+build = "build.rs"
+exclude = [
+    "tests/*",
+    "benches/*",
+    ".benchmarks/*",
+    "examples/*.ndb",
+    "target/*",
+]
+
+[package.metadata.docs.rs]
+# docs.rs builds on Linux; the native lib won't be present, so disable
+# features that would require it and allow missing docs to avoid build failure.
+features = []
+no-default-features = true
+
+[lib]
+name = "keradb_sdk"
+path = "src/lib.rs"
+
+[dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Dynamic library loading (C FFI)
+libloading = "0.8"
+
+# Error handling
+thiserror = "1.0"
+
+# Thread safety
+once_cell = "1.19"
+
+[dev-dependencies]
+tempfile = "3.10"
+rand = "0.8"
+
+[features]
+# Enable integration tests that require the native keradb shared library.
+# Run with: cargo test --features integration
+integration = []
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "vector_search"
+path = "examples/vector_search.rs"
